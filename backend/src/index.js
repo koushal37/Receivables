@@ -4,12 +4,23 @@ import cors from 'cors';
 import { z } from 'zod';
 import { supabase } from './supabase.js';
 import { requireUser } from './middleware/auth.js';
-import teamRoutes from './routes/team.js';
+import teamRoutes from './route/team.js';
+import invoiceRoutes from './route/invoices.js';
+import { requireAuth } from './middleware/auth.js';
+import dashboardRoutes from './route/dashboard.js';
+import messageRoutes from './route/messages.js';
+import webhookRoutes from './route/webhook.js';
+
 
 const app = express();
 app.use(cors({ origin: 'http://localhost:5173' }));
 app.use(express.json());
 app.use('/api/team', teamRoutes);
+app.use('/api/invoices', invoiceRoutes);
+app.use('/api/dashboard', dashboardRoutes);
+app.use('/api/messages', messageRoutes);
+app.use('/api/webhook', webhookRoutes);
+
 
 app.get('/api/health', (_req, res) => res.json({ ok: true }));
 

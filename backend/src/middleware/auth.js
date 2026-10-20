@@ -20,9 +20,12 @@ export async function requireMembership(req, res, next) {
     .eq('status', 'active')
     .limit(1)
     .maybeSingle();
+
   if (error) return res.status(500).json({ error: 'Could not load membership' });
   if (!data) return res.status(403).json({ error: 'No business' });
+
   req.membership = data;
+  req.businessId = data.business_id; // Set businessId for invoice & collection routes
   next();
 }
 
@@ -30,3 +33,6 @@ export function requireOwner(req, res, next) {
   if (req.membership.role !== 'owner') return res.status(403).json({ error: 'Owner only' });
   next();
 }
+
+// Chained middleware: authenticates the user AND attaches their business tenancy
+export const requireAuth = [requireUser, requireMembership];
