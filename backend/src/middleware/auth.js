@@ -1,38 +1,108 @@
 import { supabase } from '../supabase.js';
 
-export async function requireUser(req, res, next) {
-  const header = req.headers.authorization || '';
-  const token = header.startsWith('Bearer ') ? header.slice(7) : null;
-  if (!token) return res.status(401).json({ error: 'Missing token' });
+// Authenticates Supabase Auth token and sets req.user & req.businessId
+export const requireAuth = async (req, res, next) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader?.startsWith('Bearer ')) {
+      return res.status(401).json({ error: 'Missing or malformed Authorization header' });
+    }
 
-  const { data, error } = await supabase.auth.getUser(token);
-  if (error || !data.user) return res.status(401).json({ error: 'Invalid or expired token' });
+    const token = authHeader.split(' ')[1];
+    const { data: { user }, error } = await supabase.auth.getUser(token);
 
-  req.user = data.user;
+    if (error || !user) {
+      return res.status(401).json({ error: 'Invalid or expired authentication token' });
+    }
+
+    req.user = user;
+
+    // Fetch active business membership
+    const { data: membership, error: memErr } = await supabase
+      .from('memberships')
+      .select('business_id, role, status')
+      .eq('user_id', user.id)
+      .eq('status', 'active')
+      .maybeSingle();
+
+    if (memErr) throw memErr;
+
+    if (membership) {
+      req.businessId = membership.business_id;
+      req.userRole = membership.role;
+    }
+
+    next();
+  } catch (err) {
+    console.error('Auth error:', err);
+    res.status(500).json({ error: 'Internal authentication error' });
+  }
+};
+
+// Gate check for onboarded businesses
+export const requireBusiness = (req, res, next) => {
+  if (!req.businessId) {
+    return res.status(403).json({ error: 'No business associated with this account', code: 'NO_BUSINESS' });
+  }
   next();
-}
+};
 
-export async function requireMembership(req, res, next) {
+// Role-based Access Control Guard (owner, employee, read_only)
+export const requireRole = (...allowedRoles) => {
+  return (req, res, next) => {
+    if (!req.userRole || !allowedRoles.includes(req.userRole)) {
+      return res.status(403).json({ error: 'Forbidden: Insufficient privileges' });
+    }
+    next();
+  };
+};
+
+// Tenant Isolation Guards
+export const assertInvoiceInBusiness = async (invoiceId, businessId) => {
   const { data, error } = await supabase
-    .from('business_memberships')
-    .select('role, business_id')
-    .eq('user_id', req.user.id)
-    .eq('status', 'active')
-    .limit(1)
-    .maybeSingle();
+    .from('invoices')
+    .select('id, business_id, amount, status')
+    .eq('id', invoiceId)
+    .eq('business_id', businessId)
+    .single();
 
-  if (error) return res.status(500).json({ error: 'Could not load membership' });
-  if (!data) return res.status(403).json({ error: 'No business' });
+  if (error || !data) {
+    const notFound = new Error('Invoice not found in the authenticated business scope');
+    notFound.statusCode = 404;
+    throw notFound;
+  }
+  return data;
+};
 
-  req.membership = data;
-  req.businessId = data.business_id; // Set businessId for invoice & collection routes
-  next();
-}
+export const assertCustomerInBusiness = async (customerId, businessId) => {
+  const { data, error } = await supabase
+    .from('customers')
+    .select('id, business_id, name, phone, opt_out')
+    .eq('id', customerId)
+    .eq('business_id', businessId)
+    .single();
 
-export function requireOwner(req, res, next) {
-  if (req.membership.role !== 'owner') return res.status(403).json({ error: 'Owner only' });
-  next();
-}
+  if (error || !data) {
+    const notFound = new Error('Customer not found in the authenticated business scope');
+    notFound.statusCode = 404;
+    throw notFound;
+  }
+  return data;
+};
 
-// Chained middleware: authenticates the user AND attaches their business tenancy
-export const requireAuth = [requireUser, requireMembership];
+// Mutating Route Audit Trail Helper
+export const audit = async ({ businessId, userId, action, entity, entityId, beforeState = null, afterState = null }) => {
+  try {
+    await supabase.from('audit_logs').insert({
+      business_id: businessId,
+      user_id: userId,
+      action,
+      entity,
+      entity_id: entityId,
+      before_state: beforeState,
+      after_state: afterState
+    });
+  } catch (err) {
+    console.error('Failed to log audit event:', err);
+  }
+};

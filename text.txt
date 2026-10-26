@@ -1,0 +1,124 @@
+Problems to fix before adding features
+I confirmed the first three below by running the logic in Node.
+1. Import silently corrupts amounts. parseFloat("1,50,000") returns 1. That passes your amount > 0 check, so a CSV with Indian number formatting imports as ₹1.
+2. Import dates are wrong or crash. new Date("03/04/2026") reads as March 4, but Indian files mean 3 April. "15/10/2026" throws a RangeError, which turns the whole preview into a 500 instead of a row error.
+3. “Today” is wrong between 12:00 and 5:30 AM IST. toISOString() gives the UTC date, so it returns yesterday’s date. The SQL view’s CURRENT_DATE also follows the database timezone, not Asia/Kolkata.
+4. Tenant isolation depends on your code alone. The backend uses the service key, which bypasses RLS, so your policies don’t protect you. record-payment, record-promise and flag-dispute accept customerId and invoiceId from the request body without checking they belong to the caller’s business. A user of business A could post against business B’s invoice if they had its UUID. The WhatsApp webhook also matches customers across all businesses.
+5. New signups are stranded. App.jsx never calls /api/me or /api/onboard. A fresh user logs in, then gets 403 No business on every page. That UI existed earlier, so it looks like it was lost in a rewrite.
+6. Dashboard cards don’t filter. InvoicesPage ignores the initialStatus prop, so clicking “Overdue” shows all invoices.
+7. The queue mislabels invoices. It includes invoices not yet due, labelled “Invoice due today”. No code ever sets a promise to missed, so the “missed promise → critical” rule can never fire.
+8. Roles aren’t enforced. read_only users can record payments and import invoices, because only /api/team checks roles.
+9. Commit trusts the client. import-commit takes rows from the browser with no validation, swallows insert errors (if (!invErr)), and can leave a half-finished import with no transaction.
+10. WhatsApp sends free text. Business-initiated messages outside the 24-hour window require approved templates, so your current type: 'text' call will fail in production. The webhook also doesn’t verify Meta’s signature, and has a fallback verify token (receivables_secret_token).
+11. Nine hardcoded http://localhost:5001 URLs in the frontend, plus a hardcoded CORS origin. This breaks on deploy, and api.js takes a session while pages pass a token.
+12. Migrations aren’t reproducible. Migrations 003–005 have no grant ... to service_role (001 does). Migration 003 re-declares customers with IF NOT EXISTS, so its defaults are ignored.
+
+3. Roadmap
+
+Each phase is a topic. The order matters, but the pace is yours. Sizes are S/M/L. Every task follows the same loop: migration → backend route (zod validation, tenant check, role check) → test with Bruno or curl → UI → verify against the done-when line.
+
+Phase 0: Foundations (size M)
+This is where problems 3–8, 11 and 12 get fixed.
+- Onboarding gate: after login call /api/me. If membership is null, show a “Create your business” screen. Store role in React context.
+- One api() client using import.meta.env and the Vite proxy (relative /api/... paths). Delete every localhost string.
+- Backend helpers: requireRole(...roles), and assertInvoiceInBusiness(id, businessId) and assertCustomerInBusiness(...).
+- Create an audit_logs table (who, action, entity, before/after) and an audit() helper now, then call it from every new mutating route.
+- Migration 006: Asia/Kolkata date in the view, plus the missing grants.
+- Done when: a new signup reaches a dashboard, and a read_only user gets 403 on every write.
+
+Phase 1: Import that can be trusted (features 5–6, size M)
+- Parse amounts by stripping ₹, commas and spaces before converting. Parse dates explicitly as dd/mm/yyyy, handle Excel serial dates, and report bad ones as row errors.
+- Detect duplicates inside the file as well as against the database. Match customers by phone or reference first, then name. Don’t force +91 onto foreign numbers.
+- Commit: re-validate on the server with zod and write through one Postgres function (supabase.rpc) so it’s all-or-nothing, returning per-row results.
+- UI: Valid, Duplicate and Error tabs with row number and reason. Add a downloadable error CSV and a sample template.
+- Done when: a 200-row file with 10 deliberately bad rows reports exactly those 10, and nothing is partially imported.
+
+Phase 2: Payments (feature 8, size M)
+- Make record_payment a SQL function that does the payment and allocation atomically. Reject amounts above outstanding. Dedupe by UTR.
+- Add payment history, payment reversal (the view already excludes reversed), and a credit-note/write-off endpoint (the table exists).
+- Mark a promise fulfilled when its invoice is paid.
+- Done when: two partial payments settle an invoice, reversing one reopens it, and overpayment is rejected.
+
+Phase 3: Customers and invoice detail (features 4, 7, size M)
+- Add react-router: /invoices/:id, /customers, /customers/:id.
+- GET /api/invoices/:id returns the ledger, payments, adjustments, promises, disputes and messages. The UI shows them as one timeline.
+- Manual create/edit/void invoice. The customer page shows total outstanding and contact/opt-out status.
+- Done when: you can answer “what happened on this invoice?” from one page.
+
+Phase 4: Collection engine (features 10–13, size L)
+- Put the priority rules in one file as data (rule, threshold, priority, reason text). The UI shows the rule that fired, which makes “transparent priority rules” literal.
+- A daily job writes collection_actions rows, one per invoice per day (unique constraint, so it’s idempotent). Only invoices due today or earlier are included.
+- A second job marks promises missed when the date has passed with no payment. Add dispute resolution (the invoice returns to normal), which is missing today.
+- “My tasks” for employees: assign, start, complete with an outcome. Outcome payment_promised opens the promise form.
+- Done when: an employee logs in and sees only their tasks, and completing one updates the owner’s dashboard.
+
+Phase 5: Messaging (features 14–15, size L)
+- Apply for WhatsApp Business API access and template approval early, because approval is outside your control. Keep the mock mode until then (Meta’s Cloud API docs → Message Templates).
+- A message_templates table (name, body, variables, approval status). Send with type: 'template'.
+- Before sending, check opt-out and permission status, and enforce no duplicate reminder within a set window.
+- Webhook: verify X-Hub-Signature-256 against the raw body, resolve the business safely, and handle “STOP” as an opt-out. Remove the default verify token.
+- Communication history appears on the invoice and customer pages.
+- Done when: a reply of “STOP” blocks all further sends to that customer.
+
+Phase 6: Summaries and reports (features 16–17, size M)
+- Daily summary job at a fixed IST time (node-cron to start). It covers due today, overdue total, tasks per employee, promises due and yesterday’s collections. Send it in-app and to the owner’s WhatsApp.
+- Reports: ageing by bucket (the view already has it), customer-wise outstanding, collections by period, promise-kept rate, and tasks completed per employee. Add CSV export.
+- Add the dashboard’s missing money-in/money-out and today/month cards.
+- Done when: report totals match the ledger to the rupee.
+
+Phase 7: Hardening (feature 18, size M)
+- Write out a role matrix (owner / employee / read_only × every action) and test it.
+- Add employee deactivate (status = 'revoked') and password reset, express-rate-limit, helmet, and zod on every remaining input.
+- Backups: check what your Supabase plan covers, add a scheduled export, and test a restore at least once.
+- Tests with Vitest and supertest for ledger math, import parsing and tenant isolation. Then deploy with environment-based config and error logging.
+- Done when: a restore from backup works, and the tenant-isolation test fails if a check is removed.
+
+What Has Been Completed & Secured
+Phase 0: Strict multi-tenant isolation, role checks (read_only, employee, owner), Asia/Kolkata timezone alignment, dynamic CORS / Vite proxy configuration, and onboarding gate.
+
+Phase 1: Indian currency and dd/mm/yyyy date parsers, Excel serial date compatibility, client preview modal with CSV error export, and atomic database commits.
+
+Phase 2: Atomic payments, UTR deduplication, and payment reversal logic.
+
+Phase 4: Collection queue rules engine and daily automated cron schedules.
+
+Phase 5: Inbound Meta WhatsApp webhook with HMAC SHA-256 signature verification and opt-out (STOP) handling.
+
+Phase 6 & 7: Basic ageing summary logic, security headers via Helmet, rate limiting, and tenant-isolation testing scaffolding.
+
+What Still Needs to be Built to Finish the Product
+Phase 2 UI:
+
+Payment recording modal on the frontend (capturing UTR, method, and notes).
+
+Reversal button (restricted to owner role) and payment history table.
+
+Phase 3 Frontend:
+
+React Router integration for /invoices/:id, /customers, and /customers/:id.
+
+The single unified Timeline view component on /invoices/:id rendering payments, promises, disputes, and message history chronologically.
+
+Customer detail view displaying total outstanding balance and WhatsApp opt-out status.
+
+Phase 4 UI:
+
+The "My Tasks" employee dashboard where collectors can view assigned invoices, mark calls complete, and trigger promise-to-pay popups.
+
+Manual dispute creation and dispute resolution endpoints.
+
+Phase 5 WhatsApp Sender:
+
+Cloud API integration to send Meta-approved template messages for reminders outside the 24-hour service window.
+
+Outbound frequency capping logic (enforcing no duplicate reminder within a set interval, e.g., 24–48 hours).
+
+Phase 6 Reporting UI & Daily Digest:
+
+Frontend visual reports for Ageing Buckets, Customer-wise Outstanding, and Collector performance with a "Download CSV" export.
+
+Daily WhatsApp/In-app digest dispatching the 6:00 AM summary directly to the owner's phone.
+
+Phase 7 Team & Settings:
+
+Revoke/deactivate team member endpoint and UI toggle.

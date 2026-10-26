@@ -1,256 +1,182 @@
 import { useState } from 'react';
+import Papa from 'papaparse';
+import { api } from '../api';
 
-export default function InvoiceImportModal({ token, onClose, onSuccess }) {
-  const [file, setFile] = useState(null);
+export default function InvoiceImportModal({ isOpen, onClose, onImportSuccess }) {
+  const [activeTab, setActiveTab] = useState('valid');
+  const [previewData, setPreviewData] = useState({ valid: [], duplicates: [], errors: [] });
   const [loading, setLoading] = useState(false);
-  const [preview, setPreview] = useState(null);
-  const [error, setError] = useState('');
+  const [commitStatus, setCommitStatus] = useState('');
 
-  const handleFileChange = (e) => {
-    if (e.target.files && e.target.files[0]) {
-      setFile(e.target.files[0]);
-      setPreview(null);
-      setError('');
-    }
-  };
+  if (!isOpen) return null;
 
-  const handleUploadPreview = async () => {
+  const handleFileUpload = (e) => {
+    const file = e.target.files[0];
     if (!file) return;
+
     setLoading(true);
-    setError('');
-
-    try {
-      const formData = new FormData();
-      formData.append('file', file);
-
-      const res = await fetch('http://localhost:5001/api/invoices/import-preview', {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${token}`
-        },
-        body: formData
-      });
-
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed to preview file');
-
-      setPreview(data);
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
-    }
+    Papa.parse(file, {
+      header: true,
+      skipEmptyLines: true,
+      complete: async (results) => {
+        try {
+          const res = await api('/import/preview', {
+            method: 'POST',
+            body: JSON.stringify({ rows: results.data }),
+          });
+          setPreviewData(res);
+          setActiveTab(res.valid.length > 0 ? 'valid' : res.errors.length > 0 ? 'errors' : 'duplicates');
+        } catch (err) {
+          alert('Failed to parse file: ' + err.message);
+        } finally {
+          setLoading(false);
+        }
+      },
+    });
   };
 
   const handleCommit = async () => {
-    if (!preview || !preview.validRows || preview.validRows.length === 0) return;
     setLoading(true);
-    setError('');
-
     try {
-      const res = await fetch('http://localhost:5001/api/invoices/import-commit', {
+      await api('/import/commit', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`
-        },
-        body: JSON.stringify({ rows: preview.validRows })
+        body: JSON.stringify({ rows: previewData.valid }),
       });
-
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed to import invoices');
-
-      onSuccess(data.count);
-      onClose();
+      setCommitStatus('Import successful!');
+      setTimeout(() => {
+        onImportSuccess();
+        onClose();
+      }, 1000);
     } catch (err) {
-      setError(err.message);
+      alert('Commit failed: ' + err.message);
     } finally {
       setLoading(false);
     }
   };
 
+  const downloadErrorCsv = () => {
+    const csvContent = Papa.unparse(
+      previewData.errors.map((e) => ({
+        Row: e.row,
+        Reason: e.reason,
+        ...e.data,
+      }))
+    );
+    const blob = new Blob([csvContent], { type: 'text/csv' });
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'import-errors.csv';
+    a.click();
+  };
+
   return (
-    <div style={modalOverlayStyle}>
-      <div style={modalContentStyle}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
-          <h2 style={{ fontSize: '1.25rem', fontWeight: 600, color: '#f3f4f6' }}>Upload Invoices (Excel / CSV)</h2>
-          <button onClick={onClose} style={closeButtonStyle}>✕</button>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+      <div className="w-full max-w-4xl rounded-xl bg-white p-6 shadow-xl max-h-[90vh] flex flex-col">
+        <div className="flex justify-between items-center border-b pb-3">
+          <h3 className="text-xl font-bold">Import Invoices (CSV)</h3>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 font-bold">✕</button>
         </div>
 
-        {error && <div style={errorStyle}>{error}</div>}
+        <div className="my-4">
+          <input
+            type="file"
+            accept=".csv"
+            onChange={handleFileUpload}
+            className="block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100"
+          />
+        </div>
 
-        {!preview ? (
-          <div>
-            <div style={dropzoneStyle}>
-              <input 
-                type="file" 
-                accept=".xlsx, .xls, .csv" 
-                onChange={handleFileChange}
-                style={{ display: 'none' }} 
-                id="invoice-file-input" 
-              />
-              <label htmlFor="invoice-file-input" style={{ cursor: 'pointer', textAlign: 'center' }}>
-                <p style={{ color: '#9ca3af', marginBottom: '0.5rem' }}>
-                  {file ? file.name : 'Click to select or drop your .xlsx or .csv file'}
-                </p>
-                <span style={{ fontSize: '0.8rem', color: '#6b7280' }}>
-                  Required columns: Invoice Number, Customer Name, Due Date, Amount
-                </span>
-              </label>
-            </div>
+        {/* Tabs */}
+        <div className="flex space-x-4 border-b">
+          <button
+            onClick={() => setActiveTab('valid')}
+            className={`py-2 px-4 border-b-2 font-medium ${activeTab === 'valid' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-gray-500'}`}
+          >
+            Valid Rows ({previewData.valid.length})
+          </button>
+          <button
+            onClick={() => setActiveTab('duplicates')}
+            className={`py-2 px-4 border-b-2 font-medium ${activeTab === 'duplicates' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-gray-500'}`}
+          >
+            Duplicates ({previewData.duplicates.length})
+          </button>
+          <button
+            onClick={() => setActiveTab('errors')}
+            className={`py-2 px-4 border-b-2 font-medium ${activeTab === 'errors' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-gray-500'}`}
+          >
+            Errors ({previewData.errors.length})
+          </button>
+        </div>
 
-            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '1.5rem', gap: '0.75rem' }}>
-              <button onClick={onClose} style={secondaryButtonStyle}>Cancel</button>
-              <button 
-                disabled={!file || loading} 
-                onClick={handleUploadPreview} 
-                style={file && !loading ? primaryButtonStyle : disabledButtonStyle}
-              >
-                {loading ? 'Analyzing File...' : 'Preview Records'}
-              </button>
-            </div>
-          </div>
-        ) : (
-          <div>
-            {/* Summary Cards */}
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '0.75rem', marginBottom: '1.25rem' }}>
-              <div style={{ ...summaryCardStyle, borderColor: '#10b981' }}>
-                <div style={{ fontSize: '1.1rem', fontWeight: 700, color: '#10b981' }}>{preview.summary.validCount}</div>
-                <div style={{ fontSize: '0.75rem', color: '#9ca3af' }}>Ready to Import</div>
-              </div>
-              <div style={{ ...summaryCardStyle, borderColor: '#f59e0b' }}>
-                <div style={{ fontSize: '1.1rem', fontWeight: 700, color: '#f59e0b' }}>{preview.summary.duplicateCount}</div>
-                <div style={{ fontSize: '0.75rem', color: '#9ca3af' }}>Duplicates (Skipped)</div>
-              </div>
-              <div style={{ ...summaryCardStyle, borderColor: '#ef4444' }}>
-                <div style={{ fontSize: '1.1rem', fontWeight: 700, color: '#ef4444' }}>{preview.summary.invalidCount}</div>
-                <div style={{ fontSize: '0.75rem', color: '#9ca3af' }}>Errors (Skipped)</div>
-              </div>
-            </div>
-
-            {/* Preview Sample Table */}
-            <div style={{ maxHeight: '220px', overflowY: 'auto', border: '1px solid #374151', borderRadius: '6px', marginBottom: '1.25rem' }}>
-              <table style={{ width: '100%', fontSize: '0.8rem', textAlign: 'left', borderCollapse: 'collapse' }}>
-                <thead style={{ background: '#1f2937', color: '#9ca3af', position: 'sticky', top: 0 }}>
-                  <tr>
-                    <th style={{ padding: '8px' }}>Inv #</th>
-                    <th style={{ padding: '8px' }}>Customer</th>
-                    <th style={{ padding: '8px' }}>Amount</th>
-                    <th style={{ padding: '8px' }}>Due Date</th>
+        <div className="flex-1 overflow-y-auto py-4">
+          {activeTab === 'valid' && (
+            <table className="w-full text-left text-sm">
+              <thead>
+                <tr className="border-b bg-gray-50">
+                  <th className="p-2">Row</th>
+                  <th className="p-2">Customer</th>
+                  <th className="p-2">Invoice #</th>
+                  <th className="p-2">Amount</th>
+                  <th className="p-2">Due Date</th>
+                </tr>
+              </thead>
+              <tbody>
+                {previewData.valid.map((r) => (
+                  <tr key={r.row} className="border-b">
+                    <td className="p-2">{r.row}</td>
+                    <td className="p-2">{r.name}</td>
+                    <td className="p-2">{r.invoice_number}</td>
+                    <td className="p-2">₹{r.amount.toLocaleString('en-IN')}</td>
+                    <td className="p-2">{r.due_date}</td>
                   </tr>
-                </thead>
-                <tbody>
-                  {preview.validRows.slice(0, 10).map((r, i) => (
-                    <tr key={i} style={{ borderBottom: '1px solid #374151' }}>
-                      <td style={{ padding: '8px', color: '#f3f4f6' }}>{r.invoiceNumber}</td>
-                      <td style={{ padding: '8px', color: '#f3f4f6' }}>{r.customerName}</td>
-                      <td style={{ padding: '8px', color: '#f3f4f6' }}>₹{r.originalAmount.toLocaleString('en-IN')}</td>
-                      <td style={{ padding: '8px', color: '#f3f4f6' }}>{r.dueDate}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                ))}
+              </tbody>
+            </table>
+          )}
 
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <button onClick={() => setPreview(null)} style={secondaryButtonStyle}>Back to File</button>
-              <button 
-                disabled={preview.summary.validCount === 0 || loading} 
-                onClick={handleCommit}
-                style={preview.summary.validCount > 0 && !loading ? primaryButtonStyle : disabledButtonStyle}
-              >
-                {loading ? 'Importing...' : `Confirm & Import ${preview.summary.validCount} Invoices`}
-              </button>
+          {activeTab === 'duplicates' && (
+            <div className="space-y-2">
+              {previewData.duplicates.map((d) => (
+                <div key={d.row} className="p-3 bg-amber-50 text-amber-800 rounded border border-amber-200 text-sm">
+                  <strong>Row {d.row}:</strong> {d.reason} ({d.data.invoice_number})
+                </div>
+              ))}
             </div>
+          )}
+
+          {activeTab === 'errors' && (
+            <div className="space-y-2">
+              {previewData.errors.length > 0 && (
+                <button onClick={downloadErrorCsv} className="mb-2 text-sm text-indigo-600 underline">
+                  Download Error Rows as CSV
+                </button>
+              )}
+              {previewData.errors.map((e) => (
+                <div key={e.row} className="p-3 bg-red-50 text-red-800 rounded border border-red-200 text-sm">
+                  <strong>Row {e.row}:</strong> {e.reason}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="border-t pt-4 flex justify-between items-center">
+          <span className="text-sm text-green-600 font-semibold">{commitStatus}</span>
+          <div className="space-x-3">
+            <button onClick={onClose} className="px-4 py-2 border rounded-md text-gray-600 hover:bg-gray-50">
+              Cancel
+            </button>
+            <button
+              onClick={handleCommit}
+              disabled={loading || previewData.valid.length === 0}
+              className="px-4 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700 disabled:opacity-50"
+            >
+              Commit Valid Rows ({previewData.valid.length})
+            </button>
           </div>
-        )}
+        </div>
       </div>
     </div>
   );
 }
-
-const modalOverlayStyle = {
-  position: 'fixed',
-  top: 0,
-  left: 0,
-  right: 0,
-  bottom: 0,
-  backgroundColor: 'rgba(0, 0, 0, 0.75)',
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  zIndex: 1000
-};
-
-const modalContentStyle = {
-  backgroundColor: '#111827',
-  borderRadius: '8px',
-  border: '1px solid #374151',
-  width: '100%',
-  maxWidth: '560px',
-  padding: '1.5rem',
-  boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.5)'
-};
-
-const dropzoneStyle = {
-  border: '2px dashed #4b5563',
-  borderRadius: '8px',
-  padding: '2rem 1rem',
-  display: 'flex',
-  justifyContent: 'center',
-  alignItems: 'center',
-  backgroundColor: '#1f2937'
-};
-
-const summaryCardStyle = {
-  border: '1px solid',
-  borderRadius: '6px',
-  padding: '0.75rem',
-  backgroundColor: '#1f2937',
-  textAlign: 'center'
-};
-
-const primaryButtonStyle = {
-  backgroundColor: '#2563eb',
-  color: '#ffffff',
-  padding: '0.5rem 1rem',
-  borderRadius: '6px',
-  fontWeight: 500,
-  border: 'none',
-  cursor: 'pointer'
-};
-
-const secondaryButtonStyle = {
-  backgroundColor: '#374151',
-  color: '#d1d5db',
-  padding: '0.5rem 1rem',
-  borderRadius: '6px',
-  border: 'none',
-  cursor: 'pointer'
-};
-
-const disabledButtonStyle = {
-  backgroundColor: '#4b5563',
-  color: '#9ca3af',
-  padding: '0.5rem 1rem',
-  borderRadius: '6px',
-  border: 'none',
-  cursor: 'not-allowed'
-};
-
-const closeButtonStyle = {
-  background: 'none',
-  border: 'none',
-  color: '#9ca3af',
-  fontSize: '1.25rem',
-  cursor: 'pointer'
-};
-
-const errorStyle = {
-  backgroundColor: 'rgba(239, 68, 68, 0.2)',
-  color: '#f87171',
-  padding: '0.5rem',
-  borderRadius: '4px',
-  marginBottom: '1rem',
-  fontSize: '0.85rem'
-};
