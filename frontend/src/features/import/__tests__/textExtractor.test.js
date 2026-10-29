@@ -120,6 +120,51 @@ describe('extractInvoiceFromText: US invoice with payment terms', () => {
   });
 });
 
+// Layout seen in real GST invoices: two-column billed/shipped block, items spanning two
+// lines (name + qty, then serial/HSN/rate/amount), detail lines, and a round-off.
+const TWO_LINE_ITEMS = `
+ORBIT TRADING CO   TAX INVOICE
+Invoice No:   OTC/26-27/0101
+Invoice Date:   02 Nov 2026
+BILLED TO (CUSTOMER)   SHIPPED TO (CONSIGNEE)
+Lakeview Fabricators Pvt. Ltd.   Lakeview Plant 3
+#   Item Description   HSN/SAC   Qty
+Steel Hinges 4in   10
+1   830210   150.00   1,500.00
+Model: H-4, Zinc plated   Pcs
+Gear Box Assembly   2
+2   848340   7,250.00   14,500.00
+Amount in Words:   Indian Rupees Nineteen Thousand Only
+Subtotal (Taxable):   ₹ 16,000.00
+CGST (9%):   ₹ 1,440.00
+SGST (9%):   ₹ 1,440.00
+Round Off:   + ₹ 120.00
+Grand Total:   ₹ 19,000.00
+1. Payment is due within 15 days from the invoice date (Net 15).
+`;
+
+describe('extractInvoiceFromText: two-line items and billed/shipped columns', () => {
+  const f = extractInvoiceFromText(TWO_LINE_ITEMS);
+
+  it('takes the customer from the line under "BILLED TO (CUSTOMER)"', () => {
+    expect(f.customer_name).toBe('Lakeview Fabricators Pvt. Ltd.');
+  });
+
+  it('joins item names, quantities and rates that span two lines', () => {
+    expect(f.line_items).toEqual([
+      { description: 'Steel Hinges 4in · Model: H-4, Zinc plated', quantity: 10, unit_price: 150, amount: 1500 },
+      { description: 'Gear Box Assembly', quantity: 2, unit_price: 7250, amount: 14500 },
+    ]);
+  });
+
+  it('counts the round-off when checking totals', () => {
+    expect(f.round_off).toBe(120);
+    const d = makeDraft(f, {});
+    expect(d).toMatchObject({ subtotal: 16000, tax: 2880, amount: 19000, due_date: '2026-11-17' });
+    expect(d.warnings).toEqual(['Due date calculated from payment terms (Net 15).']);
+  });
+});
+
 describe('makeDraft / validateDraft', () => {
   it('falls back to subtotal + tax and flags inconsistent totals', () => {
     expect(makeDraft({ subtotal: '100', tax: '18' }, {}).amount).toBe(118);

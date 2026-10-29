@@ -104,6 +104,15 @@ router.post('/record-promise', ...canWrite, async (req, res, next) => {
     // Customer comes from the invoice, never from the request body (tenant isolation)
     const invoice = await assertInvoiceInBusiness(body.invoiceId, req.businessId);
 
+    // A new promise replaces any open one for this invoice (e.g. the customer moved the date)
+    const { data: replaced } = await supabase
+      .from('payment_promises')
+      .update({ status: 'revised', updated_at: new Date().toISOString() })
+      .eq('business_id', req.businessId)
+      .eq('invoice_id', invoice.id)
+      .in('status', ['upcoming', 'pending', 'missed'])
+      .select('id, promised_date');
+
     const { data, error } = await supabase
       .from('payment_promises')
       .insert({
@@ -120,8 +129,8 @@ router.post('/record-promise', ...canWrite, async (req, res, next) => {
       .single();
 
     if (error) throw error;
-    await audit({ businessId: req.businessId, userId: req.user.id, action: 'PROMISE_RECORDED', entity: 'payment_promises', entityId: data.id, afterState: body });
-    res.json({ success: true, promise: data });
+    await audit({ businessId: req.businessId, userId: req.user.id, action: 'PROMISE_RECORDED', entity: 'payment_promises', entityId: data.id, beforeState: replaced?.length ? { revised: replaced } : null, afterState: body });
+    res.json({ success: true, promise: data, revised: replaced?.length || 0 });
   } catch (err) {
     next(err);
   }

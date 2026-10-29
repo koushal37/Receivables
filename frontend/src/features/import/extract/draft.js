@@ -35,6 +35,8 @@ export function makeDraft(raw, source) {
     tax: money(raw.tax),
     amount: money(raw.amount),
     line_items: normalizeItems(raw.line_items),
+    paid_amount: money(raw.paid_amount),
+    promise_date: parseDate(raw.promise_date) || '',
     warnings,
     serverError: null,
   };
@@ -60,7 +62,8 @@ export function makeDraft(raw, source) {
     draft.due_date = draft.invoice_date;
     warnings.push('No due date found; set to the invoice date. Please check.');
   }
-  if (draft.subtotal !== '' && draft.tax !== '' && draft.amount !== '' && Math.abs(draft.subtotal + draft.tax - draft.amount) > 1) {
+  const roundOff = Number(raw.round_off) || 0;
+  if (draft.subtotal !== '' && draft.tax !== '' && draft.amount !== '' && Math.abs(draft.subtotal + draft.tax + roundOff - draft.amount) > 1) {
     warnings.push('Subtotal + tax doesn’t equal the total. Please check the amounts.');
   }
   draft.confidence = confidenceOf(draft);
@@ -78,6 +81,33 @@ function confidenceOf(d) {
   return keys.filter((k) => d[k] !== '' && d[k] !== null).length / keys.length;
 }
 
+// A blank draft for typing an invoice in by hand.
+export function emptyDraft() {
+  return makeDraft({}, { fileName: 'Manual entry', format: 'manual', method: 'manual' });
+}
+
+// Draft for editing a saved invoice (GET /api/invoices/:id).
+export function invoiceToDraft(inv) {
+  const d = makeDraft({
+    invoice_number: inv.invoice_number,
+    invoice_date: inv.invoice_date,
+    due_date: inv.due_date,
+    customer_name: inv.customers?.name ?? inv.customer_name,
+    phone: inv.customers?.phone ?? inv.customer_phone,
+    email: inv.customers?.email ?? inv.customer_email,
+    vendor_name: inv.vendor_name,
+    currency: inv.currency_code,
+    subtotal: inv.subtotal ?? '',
+    tax: inv.tax_amount ?? '',
+    amount: inv.original_amount ?? inv.amount,
+    line_items: inv.line_items,
+  }, { fileName: 'Saved invoice', format: 'saved', method: 'saved' });
+  d.warnings = []; // the record already exists; extraction warnings don't apply
+  d.id = inv.id;
+  d.total_paid = Number(inv.total_paid) || 0;
+  return d;
+}
+
 // Numeric value of an amount field that may hold user-typed text like "1,50,000".
 export const amountOf = (v) => (typeof v === 'number' ? v : parseAmount(v) ?? 0);
 
@@ -91,6 +121,10 @@ export function validateDraft(d) {
   if (d.invoice_date && d.due_date && d.invoice_date > d.due_date) errors.due_date = 'Before invoice date';
   if (text(d.phone) && !normalizePhone(d.phone)) errors.phone = '10 digits or +countrycode';
   if (text(d.email) && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(text(d.email))) errors.email = 'Invalid email';
+  if (text(d.paid_amount) && text(d.paid_amount) !== '0' && parseAmount(d.paid_amount) === null) errors.paid_amount = 'Enter a valid amount';
+  else if (amountOf(d.paid_amount) > amountOf(d.amount)) errors.paid_amount = 'More than the total';
+  if (d.promise_date && d.invoice_date && d.promise_date < d.invoice_date) errors.promise_date = 'Before invoice date';
+  if (d.total_paid && amountOf(d.amount) < d.total_paid) errors.amount = `Can’t be below the ${d.total_paid} already paid`;
   return errors;
 }
 
@@ -110,5 +144,14 @@ export function draftToRow(d, row) {
     currency: d.currency,
     vendor_name: text(d.vendor_name),
     line_items: d.line_items.filter((it) => it.description || it.amount !== ''),
+    paid_amount: d.paid_amount,
+    promise_date: d.promise_date,
   };
+}
+
+// Shape sent to PATCH /api/invoices/:id
+export function draftToPatch(d) {
+  const body = draftToRow(d, 0);
+  for (const key of ['row', 'paid_amount', 'promise_date']) delete body[key];
+  return body;
 }

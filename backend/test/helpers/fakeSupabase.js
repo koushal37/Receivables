@@ -28,6 +28,7 @@ export function createFakeSupabase(seed = {}) {
       lte(c, v) { filters.push((r) => r[c] <= v); return api; },
       gt(c, v) { filters.push((r) => r[c] > v); return api; },
       gte(c, v) { filters.push((r) => r[c] >= v); return api; },
+      ilike(c, v) { const want = v.replace(/\\([%_])/g, '$1').toLowerCase(); filters.push((r) => String(r[c] ?? '').toLowerCase() === want); return api; },
       like(c, v) { const end = v.replace(/^%/, ''); filters.push((r) => String(r[c] ?? '').endsWith(end)); return api; },
       not(c, _op, list) { const vs = list.replace(/[()]/g, '').split(','); filters.push((r) => !vs.includes(r[c])); return api; },
       or() { return api; },
@@ -63,6 +64,12 @@ export function createFakeSupabase(seed = {}) {
     from: (t) => builder(t),
     rpc: async (name, args) => {
       rpcCalls.push({ name, args });
+      if (name === 'commit_import_batch') {
+        (tables.invoices ||= []).push(...args.p_rows.map((r) => ({
+          id: crypto.randomUUID(), business_id: args.p_business_id, customer_id: 'cust-new',
+          invoice_number: r.invoice_number, original_amount: r.amount, due_date: r.due_date, record_status: 'active',
+        })));
+      }
       return { data: { success: true, count: args.p_rows?.length ?? 0, payment_id: 'p1' }, error: null };
     },
     auth: {

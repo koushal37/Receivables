@@ -4,7 +4,7 @@ import { parseWorkbook } from '../parsers/spreadsheet.js';
 import { parseJsonText } from '../parsers/json.js';
 import { parseXmlText } from '../parsers/xml.js';
 import { looksTabular } from '../extract/structured.js';
-import { makeDraft, validateDraft, draftToRow } from '../extract/draft.js';
+import { makeDraft, validateDraft, draftToRow, draftToPatch, emptyDraft, invoiceToDraft } from '../extract/draft.js';
 import { validateFile, detectFormat } from '../fileTypes.js';
 
 const toBuffer = (wb, bookType) => XLSX.write(wb, { type: 'array', bookType });
@@ -174,3 +174,33 @@ describe('draftToRow', () => {
     expect(draftToRow(d, 3)).toMatchObject({ row: 3, invoice_number: 'A', customer_name: 'B', amount: 10, due_date: '2026-12-01', currency: 'INR' });
   });
 });
+
+describe('manual entry and editing', () => {
+  it('a blank manual draft asks for the required fields only', () => {
+    expect(validateDraft(emptyDraft())).toEqual({ invoice_number: 'Required', customer_name: 'Required', amount: 'Enter a total above 0', due_date: 'Required' });
+  });
+
+  it('validates the amount already paid and the promise date', () => {
+    const d = { ...emptyDraft(), invoice_number: 'M-1', customer_name: 'Acme', amount: '1,000', invoice_date: '2026-11-01', due_date: '2026-11-30' };
+    expect(validateDraft({ ...d, paid_amount: '1,500' }).paid_amount).toBe('More than the total');
+    expect(validateDraft({ ...d, paid_amount: 'abc' }).paid_amount).toBe('Enter a valid amount');
+    expect(validateDraft({ ...d, promise_date: '2026-10-01' }).promise_date).toBe('Before invoice date');
+    expect(validateDraft({ ...d, paid_amount: '250', promise_date: '2026-12-05' })).toEqual({});
+    expect(draftToRow({ ...d, paid_amount: '250', promise_date: '2026-12-05' }, 1)).toMatchObject({ paid_amount: '250', promise_date: '2026-12-05' });
+  });
+
+  it('loads a saved invoice for editing and never lets the total drop below what was paid', () => {
+    const d = invoiceToDraft({
+      id: 'inv-1', invoice_number: 'A-1', invoice_date: '2026-10-01', due_date: '2026-10-31', original_amount: '1000.00',
+      currency_code: 'INR', total_paid: '400', customers: { name: 'Acme', phone: '+919876543210', email: null },
+      line_items: [{ description: 'Widget', quantity: 2, unit_price: 500, amount: 1000 }],
+    });
+    expect(d).toMatchObject({ id: 'inv-1', invoice_number: 'A-1', customer_name: 'Acme', phone: '+919876543210', amount: 1000, total_paid: 400, warnings: [] });
+    expect(validateDraft({ ...d, amount: '300' }).amount).toMatch(/400 already paid/);
+    const patch = draftToPatch({ ...d, due_date: '2026-11-15' });
+    expect(patch).toMatchObject({ invoice_number: 'A-1', due_date: '2026-11-15', amount: 1000 });
+    expect(patch).not.toHaveProperty('paid_amount');
+    expect(patch).not.toHaveProperty('row');
+  });
+});
+

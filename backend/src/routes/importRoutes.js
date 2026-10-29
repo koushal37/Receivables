@@ -30,6 +30,21 @@ async function existingInvoiceNumbers(businessId) {
   return numbers;
 }
 
+// Maps lower-cased invoice numbers to ids for the given business.
+async function invoiceIdsByNumber(businessId, numbers) {
+  const map = new Map();
+  for (let i = 0; i < numbers.length; i += 200) {
+    const { data, error } = await supabase
+      .from('invoices')
+      .select('id, invoice_number')
+      .eq('business_id', businessId)
+      .in('invoice_number', numbers.slice(i, i + 200));
+    if (error) throw error;
+    (data || []).forEach((row) => map.set(String(row.invoice_number).toLowerCase(), row.id));
+  }
+  return map;
+}
+
 // POST /api/import/preview - Validates, dedupes, categorizes
 router.post('/preview', ...canWrite, async (req, res, next) => {
   try {
@@ -63,24 +78,57 @@ router.post('/commit', ...canWrite, async (req, res, next) => {
     });
     if (error) throw Object.assign(new Error(error.message), { statusCode: 400 });
 
-    // Extra document fields (dates, currency, tax, line items) are stored best-effort;
-    // the columns come from migration 009 and the financial core is already committed.
+    // Fields the batch function doesn't write. Core fields first, then the document
+    // fields from migration 009 separately, so a missing migration can't block the core.
+    const ids = await invoiceIdsByNumber(req.businessId, valid.map((r) => r.invoice_number));
+    const warnings = [];
     await Promise.all(valid.map(async (r) => {
-      const { error: updErr } = await supabase
-        .from('invoices')
-        .update({
-          invoice_date: r.invoice_date,
-          currency_code: r.currency,
-          subtotal: r.subtotal,
-          tax_amount: r.tax,
-          line_items: r.line_items,
-          vendor_name: r.vendor_name,
-          source_reference: fileName || null,
-        })
-        .eq('business_id', req.businessId)
-        .eq('invoice_number', r.invoice_number);
-      if (updErr) console.warn(`Import metadata not saved for ${r.invoice_number}: ${updErr.message}`);
+      const id = ids.get(r.invoice_number.toLowerCase());
+      if (!id) return;
+      const core = await supabase.from('invoices')
+        .update({ invoice_date: r.invoice_date, currency_code: r.currency, source_reference: fileName || null })
+        .eq('id', id).eq('business_id', req.businessId);
+      if (core.error) console.warn(`Import: dates/currency not saved for ${r.invoice_number}: ${core.error.message}`);
+      const extra = await supabase.from('invoices')
+        .update({ subtotal: r.subtotal, tax_amount: r.tax, line_items: r.line_items, vendor_name: r.vendor_name })
+        .eq('id', id).eq('business_id', req.businessId);
+      if (extra.error) console.warn(`Import: tax/line items not saved for ${r.invoice_number} (run migration 009): ${extra.error.message}`);
     }));
+
+    // Optional follow-ups entered during review: money already received and promise dates
+    let payments = 0;
+    let promises = 0;
+    for (const r of valid) {
+      const id = ids.get(r.invoice_number.toLowerCase());
+      if (!id) continue;
+      if (r.paid_amount > 0) {
+        const { error: payErr } = await supabase.rpc('record_payment_atomic', {
+          p_business_id: req.businessId,
+          p_invoice_id: id,
+          p_amount: r.paid_amount,
+          p_payment_method: 'other',
+          p_utr: null,
+          p_notes: 'Recorded when the invoice was added',
+        });
+        if (payErr) warnings.push(`${r.invoice_number}: payment of ${r.paid_amount} not recorded (${payErr.message})`);
+        else payments++;
+      }
+      if (r.promise_date) {
+        const { data: inv } = await supabase.from('invoices').select('customer_id').eq('id', id).maybeSingle();
+        const { error: prErr } = await supabase.from('payment_promises').insert({
+          business_id: req.businessId,
+          customer_id: inv?.customer_id,
+          invoice_id: id,
+          promised_amount: Math.round((r.amount - r.paid_amount) * 100) / 100,
+          promised_date: r.promise_date,
+          recorded_by: req.user.id,
+          source: 'direct',
+          status: r.promise_date < todayInTz() ? 'missed' : 'upcoming',
+        });
+        if (prErr) warnings.push(`${r.invoice_number}: promise date not saved (${prErr.message})`);
+        else promises++;
+      }
+    }
 
     await audit({
       businessId: req.businessId,
@@ -90,7 +138,7 @@ router.post('/commit', ...canWrite, async (req, res, next) => {
       afterState: { count: data?.count ?? valid.length, fileName: fileName || null },
     });
 
-    res.json({ success: true, count: data?.count ?? valid.length });
+    res.json({ success: true, count: data?.count ?? valid.length, payments, promises, warnings });
   } catch (err) {
     next(err);
   }

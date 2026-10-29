@@ -11,6 +11,8 @@ export const FIELD_ALIASES = {
   due_date: ['due_date', 'duedate', 'payment_due', 'due_on', 'due'],
   currency: ['currency', 'currency_code', 'ccy'],
   vendor_name: ['vendor_name', 'vendor', 'seller', 'supplier'],
+  paid_amount: ['paid_amount', 'amount_paid', 'paid', 'received', 'amount_received', 'advance', 'advance_paid'],
+  promise_date: ['promise_date', 'promised_date', 'promised_payment_date', 'expected_payment_date', 'payment_promise_date'],
 };
 
 // "Invoice No." -> "invoice_no", "invoiceNo" -> "invoice_no"

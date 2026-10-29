@@ -59,13 +59,20 @@ Most small businesses track who owes them money in spreadsheets and chase paymen
 - **Review and edit screen:** every extracted invoice is shown in an editable table. Problems are highlighted inline, warnings explain anything uncertain (OCR, calculated totals, mismatched sums), and a full editor covers line items.
 - **Safe commit:** the server re-validates every row and rejects duplicates (within the file and against existing invoices). The batch is saved **all-or-nothing**.
 - **Clear errors** for unsupported, empty, oversized, corrupt, renamed or password-protected files.
-- Downloadable **CSV template**.
+- Downloadable **CSV template** (includes optional *Amount Paid* and *Promise Date* columns).
+
+### Manual entry and editing
+- **Add an invoice by hand**, with no file needed: **Invoices → New invoice**, or **Add manually** on the import screen to mix typed-in invoices with uploaded ones.
+- **Fill in what the document doesn't say.** Every invoice, uploaded or typed, can include the **amount already paid** and a **promised payment date**. The payment and promise are recorded when you save, and the balance due updates as you type.
+- **Edit any saved invoice:** invoice number, invoice and due dates, total, currency, customer name, phone and email, tax, vendor and line items. Every change is validated: due dates can't precede invoice dates, invoice numbers stay unique, and the total can't drop below what's already been paid. Each edit is recorded in the audit log with before and after values.
+- **Change a promise date:** recording a new promise automatically marks the old one as *revised*.
+- **Fix a wrong payment:** owners can **reverse** a payment from the invoice's activity list (with a reason for the audit log), then record the correct amount.
 
 ### Collections
 - **Dashboard** with total outstanding, overdue, due today and received this month (in India time). Each card links to the filtered invoice list.
 - **Today's action plan:** due and overdue invoices ranked *critical → important → routine*. Missed promises rank first, then age and amount. Each item says why it's ranked there and what to do next.
 - **Record payments** (bank transfer, UPI, cheque, cash, card) with UTR. Overpayment and duplicate UTRs are rejected.
-- **Promises to pay:** a daily job marks missed promises automatically.
+- **Promises to pay:** a daily job marks missed promises automatically; a new promise replaces the previous one.
 - **Disputes** pause follow-ups for an invoice.
 - **WhatsApp reminders** through Meta's Cloud API, with approved templates. Customers who opted out are skipped, there's a 24-hour no-duplicate rule, and replying **STOP** opts a customer out. Mock mode applies until credentials are set.
 - **Invoice timeline:** payments, promises, disputes and messages on one screen.
@@ -323,12 +330,13 @@ Run from the repository root:
 | `npm run build` | Production build of the app |
 | `npm run check` | Lint + tests + build (run before every deploy) |
 
-**86 automated tests** cover:
+**100 automated tests** cover:
 - Indian amount and date parsing, plus Excel serial dates without timezone off-by-one.
 - Import validation, including a 200-row file with exactly 10 bad rows reported.
 - Tenant isolation, the full role matrix, and the CORS allow-list.
+- Invoice editing rules, paid amounts and promise dates on new invoices, and promise revisions.
 - Onboarding, collection rules and ageing buckets, and webhook signatures.
-- Invoice extraction from GST/US text invoices, CSV/XLSX/XLS, JSON, UBL and CII XML.
+- Invoice extraction from GST/US text invoices (including items spanning two lines and round-off), CSV/XLSX/XLS, JSON, UBL and CII XML.
 
 The tests use an in-memory database fake, so they never touch your real data.
 

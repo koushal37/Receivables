@@ -44,6 +44,17 @@ export function validateImportRows(rows, existingNumbers = new Set(), { today } 
     if (invoiceDate && invoiceDate > dueDate) return fail('Due date is before the invoice date');
     if (phoneRaw && !phone) return fail(`Invalid phone: "${phoneRaw}". Use 10 digits or +countrycode`);
 
+    // Optional: amount already received and a promised payment date
+    const paidRaw = text(r.paid_amount);
+    const isZero = /^(?:₹|rs\.?|inr|\$)?\s*0+(?:\.0+)?$/i.test(paidRaw);
+    const paid = paidRaw && !isZero ? parseAmount(paidRaw) : 0;
+    if (paid === null) return fail(`Invalid paid amount: "${paidRaw}"`);
+    if (paid > amount) return fail('Amount paid is more than the invoice total');
+    const promiseRaw = text(r.promise_date);
+    const promiseDate = promiseRaw ? parseDate(promiseRaw) : null;
+    if (promiseRaw && !promiseDate) return fail(`Invalid promise date: "${promiseRaw}"`);
+    if (promiseDate && invoiceDate && promiseDate < invoiceDate) return fail('Promise date is before the invoice date');
+
     const lower = invoiceNumber.toLowerCase();
     if (seenInFile.has(lower)) {
       duplicates.push({ row: rowNum, reason: 'Duplicate invoice number within file', data: raw });
@@ -69,6 +80,9 @@ export function validateImportRows(rows, existingNumbers = new Set(), { today } 
       currency: normalizeCurrency(r.currency),
       vendor_name: text(r.vendor_name) || null,
       line_items: Array.isArray(r.line_items) ? r.line_items.slice(0, 500) : [],
+      paid_amount: paid,
+      // A promise only makes sense while something is still owed
+      promise_date: paid < amount ? promiseDate : null,
     });
   });
 

@@ -11,9 +11,9 @@ import FileQueue from './FileQueue';
 import DraftEditor from './DraftEditor';
 import { processFile } from './importPipeline';
 import { validateFile, MAX_FILES } from './fileTypes';
-import { validateDraft, draftToRow, amountOf } from './extract/draft';
+import { validateDraft, draftToRow, amountOf, emptyDraft } from './extract/draft';
 
-const TEMPLATE = 'Invoice Number,Customer Name,Phone,Email,Invoice Date,Due Date,Subtotal,Tax,Amount,Currency\nINV-001,Acme Traders,9876543210,accounts@acme.in,01/10/2026,31/10/2026,"1,00,000","18,000","1,18,000",INR\n';
+const TEMPLATE = 'Invoice Number,Customer Name,Phone,Email,Invoice Date,Due Date,Subtotal,Tax,Amount,Currency,Amount Paid,Promise Date\nINV-001,Acme Traders,9876543210,accounts@acme.in,01/10/2026,31/10/2026,"1,00,000","18,000","1,18,000",INR,"50,000",15/11/2026\n';
 
 function downloadText(name, text, type = 'text/csv') {
   const url = URL.createObjectURL(new Blob([text], { type }));
@@ -123,7 +123,8 @@ export default function ImportPage() {
       }
       const res = await api('/import/commit', { method: 'POST', body: { rows, fileName } });
       const total = included.reduce((s, { d }) => s + amountOf(d.amount), 0);
-      setResult({ count: res.count ?? rows.length, total, currency: included[0].d.currency });
+      setResult({ count: res.count ?? rows.length, total, currency: included[0].d.currency, payments: res.payments || 0, promises: res.promises || 0 });
+      (res.warnings || []).forEach((w) => toast.error(w));
       setDrafts([]);
       setFiles([]);
       toast.success(`Imported ${res.count ?? rows.length} invoice${rows.length === 1 ? '' : 's'}.`);
@@ -148,7 +149,10 @@ export default function ImportPage() {
         <div className="card">
           <EmptyState icon="checkCircle" title={`${result.count} invoice${result.count === 1 ? '' : 's'} imported`}
             action={<div className="row" style={{ justifyContent: 'center' }}><a className="btn btn-primary" href={href('/invoices')}>View invoices</a><Button onClick={() => setResult(null)}>Import more</Button></div>}>
-            {formatMoney(result.total, result.currency)} added to your receivables. Overdue items will show up in today’s action plan.
+            {formatMoney(result.total, result.currency)} added to your receivables
+            {result.payments > 0 && `, with ${result.payments} payment${result.payments === 1 ? '' : 's'} recorded`}
+            {result.promises > 0 && ` and ${result.promises} promise date${result.promises === 1 ? '' : 's'} saved`}
+            . Overdue items will show up in today’s action plan.
           </EmptyState>
         </div>
       </div>
@@ -164,6 +168,7 @@ export default function ImportPage() {
         </div>
         <div className="page-actions">
           <Button icon="download" onClick={() => downloadText('invoice-import-template.csv', TEMPLATE)}>CSV template</Button>
+          <Button icon="plus" onClick={() => { setResult(null); setEditing('new'); }}>Add manually</Button>
         </div>
       </div>
 
@@ -221,6 +226,7 @@ export default function ImportPage() {
                         <td data-label="Total" className="num">
                           <input className="input input-sm tabular amount-input" inputMode="decimal" value={d.amount} onChange={(e) => updateDraft(d.key, { amount: e.target.value })} aria-label={`Total in ${d.currency}`} aria-invalid={Boolean(errors.amount)} placeholder="0.00" />
                           <span className="hint">{d.currency}</span>
+                          {amountOf(d.paid_amount) > 0 && <span className="hint paid-note">{formatMoney(amountOf(d.paid_amount), d.currency)} paid</span>}
                         </td>
                         <td data-label="Source" className="muted source-cell" title={d.source.fileName}>
                           <span className="truncate">{d.source.fileName}</span>
@@ -278,7 +284,16 @@ export default function ImportPage() {
         </div>
       )}
 
-      {editing && (
+      {editing === 'new' && (
+        <DraftEditor
+          key="new"
+          mode="create"
+          draft={emptyDraft()}
+          onClose={() => setEditing(null)}
+          onSave={(d) => { setDrafts((list) => [...list, d]); setEditing(null); toast.info('Added to the list below. Import when you’re ready.'); }}
+        />
+      )}
+      {editing && editing !== 'new' && (
         <DraftEditor
           key={editing}
           draft={drafts.find((d) => d.key === editing)}

@@ -114,14 +114,74 @@ function extractCurrency(text) {
   return '';
 }
 
+const ITEM_END = /\b(?:sub\s*-?\s*total|grand\s*total|amount\s*in\s*words|in\s*words|bank\s*(?:transfer|details)|terms\s*(?:&|and)\s*conditions|round\s*off)\b/i;
+const MONEY_COL = /^(?:₹|rs\.?|inr|usd|eur|gbp|\$|€|£)?\s?-?\d[\d,]*\.\d{1,2}$/i;
+const NUMBER_COL = /^\d+(?:\.\d+)?$/;
+const UNIT_WORD = /^(?:nos?\.?|pcs\.?|pieces?|units?|rolls?|hrs?|hours?|kgs?|ea|each|sets?|boxes?|mtrs?|meters?|ltrs?|litres?)$/i;
+const toNum = (c) => parseAmount(c.replace(/^-/, ''));
+
+function splitCols(line) {
+  return line.trim().split(/\s{3,}/).map((c) => c.trim()).filter(Boolean);
+}
+
+// Column-aware parser for PDF/DOCX text, where columns are separated by wide gaps.
+// Handles items whose name (and qty) sit on one line and rate/amount on the next,
+// and detail lines ("Model: ...") that follow an item.
+function extractColumnItems(lines, header) {
+  const items = [];
+  let pending = null; // { text: [], qty }
+  for (let i = header + 1; i < lines.length && items.length < 200; i++) {
+    const line = lines[i];
+    if (!line.trim()) continue;
+    if (ITEM_END.test(line) || TOTAL_LABELS[0].test(line) || TAX_PART_LABEL.test(line) || TAX_TOTAL_LABEL.test(line)) break;
+    const cols = splitCols(line);
+    const money = cols.filter((c) => MONEY_COL.test(c)).map(toNum).filter((n) => n !== null);
+    const text = cols.filter((c) => !MONEY_COL.test(c) && !NUMBER_COL.test(c) && !UNIT_WORD.test(c) && /[a-z]{2,}/i.test(c) && !/^\(.{0,6}\)$/.test(c));
+    const nums = cols.filter((c) => NUMBER_COL.test(c)).map(Number);
+
+    if (money.length) {
+      const amount = money[money.length - 1];
+      const unit = money.length >= 2 ? money[money.length - 2] : '';
+      // Quantity: the candidate for which qty x rate = amount, else the rate implied by the amount
+      const candidates = [pending?.qty, ...nums].filter((n) => n > 0 && n < 1e6);
+      let qty = unit ? candidates.find((q) => Math.abs(q * unit - amount) <= Math.max(1, amount * 0.001)) : candidates[candidates.length - 1];
+      if (qty === undefined) qty = unit ? Math.round((amount / unit) * 1000) / 1000 : '';
+      const description = [...(pending?.text || []), ...text].join(' ').replace(/\s+/g, ' ').trim();
+      if (description) items.push({ description: description.slice(0, 200), quantity: qty, unit_price: unit, amount });
+      pending = null;
+    } else if (text.length) {
+      const trailingQty = NUMBER_COL.test(cols[cols.length - 1]) ? Number(cols[cols.length - 1]) : undefined;
+      if (trailingQty !== undefined || pending) {
+        pending = { text: [...(pending?.text || []), ...text], qty: trailingQty ?? pending?.qty };
+      } else if (items.length) {
+        // Detail line belonging to the previous item
+        const last = items[items.length - 1];
+        last.description = `${last.description} · ${text.join(' ')}`.slice(0, 200);
+      } else {
+        pending = { text, qty: undefined };
+      }
+    }
+  }
+  return items;
+}
+
 function extractLineItems(lines) {
   const header = lines.findIndex((l) => /\b(description|particulars|item|product|service|details)\b/i.test(l) && /\b(qty|quantity|hrs|hours|units?)\b|\b(rate|price|amount|total)\b/i.test(l));
   if (header === -1) return [];
+
+  // Text with column gaps (PDF/DOCX): use the column-aware parser
+  const body = lines.slice(header + 1, header + 40);
+  if (body.some((l) => splitCols(l).length >= 3)) {
+    const items = extractColumnItems(lines, header);
+    if (items.length) return items;
+  }
+
+  // Single-spaced text (OCR): take the numbers at the end of each line
   const items = [];
   for (let i = header + 1; i < lines.length; i++) {
     const line = lines[i].trim();
     if (!line) continue;
-    if (SUBTOTAL_LABEL.test(line) || TOTAL_LABELS.some((r) => r.test(line)) || TAX_PART_LABEL.test(line) || TAX_TOTAL_LABEL.test(line)) break;
+    if (SUBTOTAL_LABEL.test(line) || TOTAL_LABELS.some((r) => r.test(line)) || TAX_PART_LABEL.test(line) || TAX_TOTAL_LABEL.test(line) || ITEM_END.test(line)) break;
     const nums = findAmounts(line);
     const desc = line
       .replace(/^\s*\d{1,3}[.)]?\s+/, '') // serial number
@@ -163,9 +223,14 @@ export function extractInvoiceFromText(rawText) {
   const terms = /\bnet\s*(\d{1,3})\b|\b(\d{1,3})\s*days?\s*(?:credit|terms|from\s*invoice)/i.exec(text);
   if (terms) out.terms_days = Number(terms[1] || terms[2]);
 
-  const customer = firstMatch(lines, LABELS.customer_name, (v) => {
-    const name = cleanName(v);
-    return name && /[a-z]{2,}/i.test(name) && !/^(?:details|address|name)$/i.test(name) ? name : null;
+  const isName = (name) => name && /[a-z]{2,}/i.test(name) && !/^(?:details|address|name|customer|buyer|consignee)$/i.test(name)
+    && !LABELS.customer_name.some((re) => re.test(name));
+  const customer = firstMatch(lines, LABELS.customer_name, (v, i) => {
+    // "BILLED TO (CUSTOMER)   SHIPPED TO (CONSIGNEE)": the name is on the next line
+    const sameLine = cleanName(v.replace(/^\([^)]*\)\s*/, ''));
+    if (isName(sameLine)) return sameLine;
+    const next = lines.slice(i + 1, i + 3).map((l) => cleanName(l.trim())).find(Boolean);
+    return isName(next) ? next : null;
   });
   if (customer) {
     out.customer_name = customer.value;
@@ -211,6 +276,12 @@ export function extractInvoiceFromText(rawText) {
       const single = lines.find((l) => TAX_SINGLE_LABEL.test(l) && !NOT_TAX.test(l) && !NOT_TOTAL.test(l) && !TOTAL_LABELS[0].test(l) && lastAmount(l) !== null);
       if (single) out.tax = lastAmount(single);
     }
+  }
+
+  const roundLine = lines.find((l) => /\bround(?:ing)?\s*-?\s*off\b/i.test(l));
+  if (roundLine) {
+    const n = lastAmount(roundLine);
+    if (n !== null) out.round_off = /-\s*(?:₹|rs\.?|inr|\$)?\s*\d/i.test(roundLine.replace(/round(?:ing)?\s*-?\s*off/i, '')) ? -n : n;
   }
 
   out.currency = extractCurrency(text);

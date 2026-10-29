@@ -8,6 +8,10 @@ import Button from '../../components/ui/Button';
 import { Skeleton, EmptyState, Alert, StatusBadge } from '../../components/ui/Feedback';
 import { displayStatus, matchesFilter, todayIst } from './invoiceStatus';
 import InvoiceDetail from './InvoiceDetail';
+import DraftEditor from '../import/DraftEditor';
+import { emptyDraft } from '../import/extract/draft';
+import { createInvoice } from './invoiceApi';
+import { useToast } from '../../components/ui/toastContext';
 
 const FILTERS = [
   ['all', 'All'],
@@ -24,6 +28,8 @@ export default function InvoicesPage({ status = 'all', search: initialSearch = '
   const { data, error, loading, reload } = useApi('/invoices');
   const [search, setSearch] = useState(initialSearch);
   const [selectedId, setSelectedId] = useState(null);
+  const [creating, setCreating] = useState(false);
+  const toast = useToast();
 
   const invoices = useMemo(() => data?.invoices ?? [], [data]);
   const today = todayIst();
@@ -42,6 +48,7 @@ export default function InvoicesPage({ status = 'all', search: initialSearch = '
         </div>
         {can('write') && (
           <div className="page-actions">
+            <Button icon="plus" onClick={() => setCreating(true)}>New invoice</Button>
             <a className="btn btn-primary" href={href('/import')}><Icon name="upload" size={17} />Import invoices</a>
           </div>
         )}
@@ -70,7 +77,7 @@ export default function InvoicesPage({ status = 'all', search: initialSearch = '
             {[0, 1, 2, 3, 4].map((i) => <Skeleton key={i} height={20} />)}
           </div>
         ) : invoices.length === 0 ? (
-          <EmptyState icon="file" title="No invoices yet" action={can('write') && <a className="btn btn-primary" href={href('/import')}><Icon name="upload" size={17} />Import your first invoices</a>}>
+          <EmptyState icon="file" title="No invoices yet" action={can('write') && <div className="row" style={{ justifyContent: 'center' }}><a className="btn btn-primary" href={href('/import')}><Icon name="upload" size={17} />Import invoices</a><Button icon="plus" onClick={() => setCreating(true)}>Add one manually</Button></div>}>
             Upload PDFs, spreadsheets, images or e-invoices and we’ll extract the details for you.
           </EmptyState>
         ) : rows.length === 0 ? (
@@ -111,6 +118,21 @@ export default function InvoicesPage({ status = 'all', search: initialSearch = '
       </div>
 
       {selected && <InvoiceDetail invoice={selected} onClose={() => setSelectedId(null)} onChanged={reload} />}
+
+      {creating && (
+        <DraftEditor
+          mode="create"
+          draft={emptyDraft()}
+          onClose={() => setCreating(false)}
+          onSave={async (d) => {
+            const res = await createInvoice(d);
+            (res.warnings || []).forEach((w) => toast.error(w));
+            toast.success(`Invoice ${d.invoice_number.trim()} added.`);
+            setCreating(false);
+            reload();
+          }}
+        />
+      )}
     </div>
   );
 }
