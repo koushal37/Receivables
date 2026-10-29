@@ -1,6 +1,8 @@
 import { supabase } from '../supabase.js';
 
-// Authenticates Supabase Auth token and sets req.user & req.businessId
+const httpError = (statusCode, message) => Object.assign(new Error(message), { statusCode });
+
+// Authenticates Supabase Auth token and sets req.user, req.businessId & req.userRole
 export const requireAuth = async (req, res, next) => {
   try {
     const authHeader = req.headers.authorization;
@@ -9,7 +11,7 @@ export const requireAuth = async (req, res, next) => {
     }
 
     const token = authHeader.split(' ')[1];
-    const { data: { user }, error } = await supabase.auth.getUser(token);
+    const { data: { user } = {}, error } = await supabase.auth.getUser(token);
 
     if (error || !user) {
       return res.status(401).json({ error: 'Invalid or expired authentication token' });
@@ -17,16 +19,18 @@ export const requireAuth = async (req, res, next) => {
 
     req.user = user;
 
-    // Fetch active business membership
-    const { data: membership, error: memErr } = await supabase
-      .from('memberships')
+    // Fetch active business membership (oldest wins if a user somehow has several)
+    const { data: memberships, error: memErr } = await supabase
+      .from('business_memberships')
       .select('business_id, role, status')
       .eq('user_id', user.id)
       .eq('status', 'active')
-      .maybeSingle();
+      .order('created_at', { ascending: true })
+      .limit(1);
 
     if (memErr) throw memErr;
 
+    const membership = memberships?.[0];
     if (membership) {
       req.businessId = membership.business_id;
       req.userRole = membership.role;
@@ -57,20 +61,21 @@ export const requireRole = (...allowedRoles) => {
   };
 };
 
+// Convenience stacks
+export const canRead = [requireAuth, requireBusiness];
+export const canWrite = [requireAuth, requireBusiness, requireRole('owner', 'employee')];
+export const ownerOnly = [requireAuth, requireBusiness, requireRole('owner')];
+
 // Tenant Isolation Guards
 export const assertInvoiceInBusiness = async (invoiceId, businessId) => {
   const { data, error } = await supabase
     .from('invoices')
-    .select('id, business_id, amount, status')
+    .select('id, business_id, customer_id, original_amount, record_status')
     .eq('id', invoiceId)
     .eq('business_id', businessId)
-    .single();
+    .maybeSingle();
 
-  if (error || !data) {
-    const notFound = new Error('Invoice not found in the authenticated business scope');
-    notFound.statusCode = 404;
-    throw notFound;
-  }
+  if (error || !data) throw httpError(404, 'Invoice not found in the authenticated business scope');
   return data;
 };
 
@@ -80,29 +85,22 @@ export const assertCustomerInBusiness = async (customerId, businessId) => {
     .select('id, business_id, name, phone, opt_out')
     .eq('id', customerId)
     .eq('business_id', businessId)
-    .single();
+    .maybeSingle();
 
-  if (error || !data) {
-    const notFound = new Error('Customer not found in the authenticated business scope');
-    notFound.statusCode = 404;
-    throw notFound;
-  }
+  if (error || !data) throw httpError(404, 'Customer not found in the authenticated business scope');
   return data;
 };
 
 // Mutating Route Audit Trail Helper
-export const audit = async ({ businessId, userId, action, entity, entityId, beforeState = null, afterState = null }) => {
-  try {
-    await supabase.from('audit_logs').insert({
-      business_id: businessId,
-      user_id: userId,
-      action,
-      entity,
-      entity_id: entityId,
-      before_state: beforeState,
-      after_state: afterState
-    });
-  } catch (err) {
-    console.error('Failed to log audit event:', err);
-  }
+export const audit = async ({ businessId, userId, action, entity, entityId = null, beforeState = null, afterState = null }) => {
+  const { error } = await supabase.from('audit_logs').insert({
+    business_id: businessId,
+    user_id: userId,
+    action,
+    entity,
+    entity_id: entityId,
+    before_state: beforeState,
+    after_state: afterState
+  });
+  if (error) console.error('Failed to log audit event:', error.message);
 };

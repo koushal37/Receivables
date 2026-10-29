@@ -1,34 +1,33 @@
+// Priority rules as data: first match wins. `priority` uses the queue's text levels.
 export const COLLECTION_RULES = [
   {
     code: 'MISSED_PROMISE',
-    priority: 1, // Highest
+    priority: 'critical',
     label: 'Critical: Missed Promise',
-    evaluate: (invoice, promise) => {
-      return promise && promise.status === 'missed';
-    },
+    evaluate: (invoice, promise) => promise?.status === 'missed',
   },
   {
     code: 'HIGH_VALUE_OVERDUE',
-    priority: 2,
+    priority: 'critical',
     label: 'High: Overdue > ₹1,00,000',
-    evaluate: (invoice) => {
-      return invoice.days_overdue > 0 && invoice.outstanding_amount >= 100000;
-    },
+    evaluate: (invoice) => invoice.days_overdue > 0 && invoice.outstanding_amount >= 100000,
   },
   {
     code: 'OVERDUE_30_DAYS',
-    priority: 3,
+    priority: 'important',
     label: 'Medium: Overdue > 30 Days',
-    evaluate: (invoice) => {
-      return invoice.days_overdue > 30;
-    },
+    evaluate: (invoice) => invoice.days_overdue > 30,
+  },
+  {
+    code: 'OVERDUE',
+    priority: 'routine',
+    label: 'Standard: Overdue',
+    evaluate: (invoice) => invoice.days_overdue > 0,
   },
   {
     code: 'DUE_TODAY',
-    priority: 4,
+    priority: 'routine',
     label: 'Standard: Due Today',
-    evaluate: (invoice) => {
-      return invoice.computed_status === 'due_today';
-    },
+    evaluate: (invoice) => invoice.computed_status === 'due_today',
   },
 ];

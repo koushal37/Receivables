@@ -1,77 +1,77 @@
 import cron from 'node-cron';
 import { supabase } from '../supabase.js';
 import { COLLECTION_RULES } from './rules.js';
+import { todayInTz } from '../lib/dates.js';
 
 export function initDailyJobs() {
-  // Runs everyday at 06:00 AM IST (00:30 UTC)
-  cron.schedule('30 0 * * *', async () => {
+  // Runs every day at 06:00 IST
+  cron.schedule('0 6 * * *', async () => {
     console.log('[CRON] Executing daily collection & promise status jobs...');
     await markMissedPromises();
     await generateDailyCollectionActions();
-  });
+  }, { timezone: 'Asia/Kolkata' });
 }
 
-// 1. Mark Passed Promises as 'missed'
+// 1. Mark passed promises as 'missed' (new promises are created as 'upcoming')
 export async function markMissedPromises() {
-  const todayIST = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(new Date());
-
-  const { data: expiredPromises, error } = await supabase
-    .from('promises')
+  const { data, error } = await supabase
+    .from('payment_promises')
     .update({ status: 'missed', updated_at: new Date().toISOString() })
-    .eq('status', 'pending')
-    .lt('promise_date', todayIST)
-    .select('id, invoice_id');
+    .in('status', ['upcoming', 'pending'])
+    .lt('promised_date', todayInTz())
+    .select('id');
 
-  if (error) console.error('Error updating missed promises:', error);
-  else console.log(`[CRON] Set ${expiredPromises?.length || 0} promises to missed.`);
+  if (error) console.error('[CRON] Error updating missed promises:', error.message);
+  else console.log(`[CRON] Set ${data?.length || 0} promises to missed.`);
 }
 
-// 2. Generate Idempotent Daily Collection Actions
+export function matchRule(invoice, latestPromise) {
+  return COLLECTION_RULES.find((rule) => rule.evaluate(invoice, latestPromise)) || null;
+}
+
+// 2. Generate idempotent daily collection actions (one per invoice per day)
 export async function generateDailyCollectionActions() {
-  const todayIST = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(new Date());
+  const today = todayInTz();
 
-  // Fetch all invoices due today or overdue with balances
   const { data: invoices, error } = await supabase
-    .from('invoice_summary_view')
-    .select('*')
-    .in('computed_status', ['due_today', 'overdue'])
-    .gt('outstanding_amount', 0);
+    .from('invoice_ledger_view')
+    .select('id, business_id, customer_id, outstanding_balance, days_overdue, due_date, payment_status')
+    .gt('outstanding_balance', 0)
+    .lte('due_date', today)
+    .not('payment_status', 'in', '(void,disputed)');
 
-  if (error || !invoices) return;
+  if (error || !invoices) {
+    if (error) console.error('[CRON] Could not load invoices:', error.message);
+    return;
+  }
 
   for (const inv of invoices) {
-    // Check if open promise exists
-    const { data: activePromise } = await supabase
-      .from('promises')
-      .select('*')
+    const { data: latestPromise } = await supabase
+      .from('payment_promises')
+      .select('status')
       .eq('invoice_id', inv.id)
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle();
 
-    // Match priority rule
-    let matchedRule = null;
-    for (const rule of COLLECTION_RULES) {
-      if (rule.evaluate(inv, activePromise)) {
-        matchedRule = rule;
-        break;
-      }
-    }
+    const rule = matchRule({ ...inv, outstanding_amount: Number(inv.outstanding_balance), computed_status: inv.due_date === today ? 'due_today' : 'overdue' }, latestPromise);
+    if (!rule) continue;
 
-    if (matchedRule) {
-      // Upsert one action per invoice per date
-      await supabase.from('collection_actions').upsert(
-        {
-          business_id: inv.business_id,
-          invoice_id: inv.id,
-          action_date: todayIST,
-          priority: matchedRule.priority,
-          rule_triggered: matchedRule.code,
-          reason: matchedRule.label,
-          status: 'pending',
-        },
-        { onConflict: 'invoice_id, action_date' }
-      );
-    }
+    const { error: upErr } = await supabase.from('collection_actions').upsert(
+      {
+        business_id: inv.business_id,
+        customer_id: inv.customer_id,
+        invoice_id: inv.id,
+        action_date: today,
+        scheduled_at: today,
+        priority: rule.priority,
+        priority_reason: rule.label,
+        rule_triggered: rule.code,
+        reason: rule.label,
+        status: 'queued',
+      },
+      { onConflict: 'invoice_id,action_date' }
+    );
+    if (upErr) console.error(`[CRON] Action upsert failed for ${inv.id}:`, upErr.message);
   }
 }
