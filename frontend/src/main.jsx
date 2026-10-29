@@ -32,3 +32,11 @@ if (missingEnv.length) {
     </StrictMode>
   );
 }
+
+// Installable PWA: register the service worker in production builds only
+// (in dev it would cache modules and fight with hot reload).
+if (import.meta.env.PROD && 'serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js').catch((err) => console.warn('Service worker registration failed:', err));
+  });
+}

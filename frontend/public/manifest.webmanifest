@@ -1,0 +1,22 @@
+{
+  "name": "Receivables",
+  "short_name": "Receivables",
+  "description": "Import invoices in any format, see who to follow up with today, and get paid on time.",
+  "id": "/",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#faf9f7",
+  "theme_color": "#0f6e5c",
+  "categories": ["business", "finance", "productivity"],
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    { "name": "Import invoices", "url": "/#/import", "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }] },
+    { "name": "Overdue invoices", "url": "/#/invoices?status=overdue", "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }] }
+  ]
+}

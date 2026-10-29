@@ -1,0 +1,25 @@
+# Render Blueprint: New -> Blueprint -> pick this repo.
+# Secrets are declared with `sync: false`, so Render asks for their values; none are stored here.
+services:
+  - type: web
+    name: receivables-api
+    runtime: node
+    region: singapore
+    plan: starter            # always-on; the free plan sleeps and skips the 06:00 IST cron
+    branch: main
+    # rootDir intentionally omitted: the backend imports ../shared, so the whole repo is needed
+    buildCommand: npm --prefix backend ci --omit=dev
+    startCommand: npm --prefix backend start
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: "20"
+      - key: TRUST_PROXY
+        value: "1"
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_KEY
+        sync: false
+      - key: ALLOWED_ORIGINS
+        sync: false

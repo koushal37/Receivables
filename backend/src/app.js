@@ -16,6 +16,10 @@ import webhookRoutes from './routes/webhookRoutes.js';
 
 export const app = express();
 
+// Behind a hosting proxy (Render, Railway, Fly...), trust its X-Forwarded-For hop so
+// rate limiting sees real client IPs. Set TRUST_PROXY=1 in production.
+if (process.env.TRUST_PROXY) app.set('trust proxy', Number(process.env.TRUST_PROXY) || process.env.TRUST_PROXY);
+
 // Security Headers
 app.use(helmet());
 
