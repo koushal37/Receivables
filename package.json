@@ -2,6 +2,7 @@
   "name": "receivables",
   "private": true,
   "description": "Receivables management: invoice import, collections queue, payments and reminders",
+  "type": "module",
   "scripts": {
     "install:all": "npm --prefix backend install && npm --prefix frontend install",
     "dev:backend": "npm --prefix backend run dev",
@@ -12,6 +13,6 @@
     "check": "npm run lint && npm test && npm run build"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   }
 }

@@ -14,7 +14,7 @@ services:
     autoDeploy: true
     envVars:
       - key: NODE_VERSION
-        value: "20"
+        value: "24"            # 22+ required: supabase-js needs Node's built-in WebSocket
       - key: TRUST_PROXY
         value: "1"
       - key: SUPABASE_URL

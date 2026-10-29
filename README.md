@@ -143,7 +143,7 @@ Receivables is a **Progressive Web App**: a website that installs and behaves li
 | --- | --- |
 | Frontend | React 19, Vite, hand-written CSS design tokens (no CSS framework), Inter Variable (self-hosted) |
 | File parsing | PDF.js, Tesseract.js (OCR), SheetJS, mammoth, heic2any, native DOMParser |
-| Backend | Node.js 20+, Express 5, zod, helmet, express-rate-limit, node-cron |
+| Backend | Node.js 22+, Express 5, zod, helmet, express-rate-limit, node-cron |
 | Database and auth | Supabase (Postgres, Auth, row-level security, SQL functions) |
 | Messaging | Meta WhatsApp Cloud API |
 | Testing | Vitest, Supertest, jsdom |
@@ -151,7 +151,7 @@ Receivables is a **Progressive Web App**: a website that installs and behaves li
 
 ## Run it locally
 
-Requirements: **Node.js 20+** and a Supabase project.
+Requirements: **Node.js 22+** (24 recommended) and a Supabase project.
 
 ```bash
 git clone https://github.com/koushal37/Receivables.git
@@ -203,7 +203,7 @@ Pick **one** of the two options.
 
 **Option A: Blueprint (uses `render.yaml`, fastest)**
 1. Render dashboard → **New → Blueprint** → connect GitHub → choose `koushal37/Receivables`, branch `main`.
-2. Render reads `render.yaml` and creates `receivables-api` (Node, Singapore, always-on *Starter* plan, health check `/api/health`).
+2. Render reads `render.yaml` and creates `receivables-api` (Node 24, Singapore, always-on *Starter* plan, health check `/api/health`).
 3. It asks for the three secret values:
    - `SUPABASE_URL`: your Project URL
    - `SUPABASE_SERVICE_KEY`: the service_role / secret key
@@ -223,7 +223,7 @@ Pick **one** of the two options.
 
    | Key | Value |
    | --- | --- |
-   | `NODE_VERSION` | `20` |
+   | `NODE_VERSION` | `24` (must be 22 or newer) |
    | `TRUST_PROXY` | `1` |
    | `SUPABASE_URL` | your Project URL |
    | `SUPABASE_SERVICE_KEY` | service_role / secret key |
@@ -232,7 +232,10 @@ Pick **one** of the two options.
 5. **Create Web Service.**
 
 **Verify:** open `https://<your-api>.onrender.com/api/health`. It should show `{"ok":true}`.
-If the deploy fails, open **Logs**. A message naming `SUPABASE_URL` or `SUPABASE_SERVICE_KEY` means that variable is missing. `npm ci` printing its help text means Root Directory isn't empty.
+If the deploy fails, open **Logs**:
+- `Node.js detected but native WebSocket not found`: `NODE_VERSION` is below 22. Set it to `24` and redeploy.
+- A message naming `SUPABASE_URL` or `SUPABASE_SERVICE_KEY`: that variable is missing.
+- `npm ci` printing its help text: Root Directory isn't empty.
 
 ### Step 3: deploy the app on Vercel
 
