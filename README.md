@@ -255,7 +255,9 @@ If the deploy fails, open **Logs**:
 
 ### Step 4: connect the pieces
 
-1. **Render → receivables-api → Environment:** set `ALLOWED_ORIGINS` to your Vercel URL (for example `https://receivables.vercel.app`; no trailing slash, comma-separate several). Save; Render redeploys.
+1. **Render → your API service → Environment:** set `ALLOWED_ORIGINS` to the address you open the app from, for example `https://receivables.vercel.app`. Separate several with commas. To also allow Vercel preview URLs, add a wildcard: `https://receivables.vercel.app,https://receivables-*.vercel.app`. Save; Render redeploys.
+
+   > **"Cannot reach the server" in the app?** That's almost always CORS. Open Render → **Logs** and look for `[CORS] Blocked request from origin "…"`, then add that exact address to `ALLOWED_ORIGINS`.
 2. **Supabase → Authentication → URL Configuration:**
    - **Site URL:** your Vercel URL
    - **Redirect URLs:** add `https://<your-vercel-url>/**`
@@ -298,7 +300,7 @@ Until this is done, reminders run in **mock mode**: they're logged, but no messa
 | --- | --- | --- | --- |
 | API | `SUPABASE_URL` | yes | Supabase project URL |
 | API | `SUPABASE_SERVICE_KEY` | yes | Service-role key (server only) |
-| API | `ALLOWED_ORIGINS` | production | Comma-separated frontend URLs allowed by CORS |
+| API | `ALLOWED_ORIGINS` | production | Comma-separated frontend URLs allowed by CORS; `*` wildcards allowed (e.g. `https://receivables-*.vercel.app`) |
 | API | `TRUST_PROXY` | production | Proxy hops in front of the API (`1` on Render) |
 | API | `PORT` | no | Defaults to 5001; Render sets it automatically |
 | API | `META_WHATSAPP_TOKEN`, `META_PHONE_ID` | no | WhatsApp sending; mock mode when unset |
@@ -321,10 +323,10 @@ Run from the repository root:
 | `npm run build` | Production build of the app |
 | `npm run check` | Lint + tests + build (run before every deploy) |
 
-**81 automated tests** cover:
+**86 automated tests** cover:
 - Indian amount and date parsing, plus Excel serial dates without timezone off-by-one.
 - Import validation, including a 200-row file with exactly 10 bad rows reported.
-- Tenant isolation and the full role matrix.
+- Tenant isolation, the full role matrix, and the CORS allow-list.
 - Onboarding, collection rules and ageing buckets, and webhook signatures.
 - Invoice extraction from GST/US text invoices, CSV/XLSX/XLS, JSON, UBL and CII XML.
 

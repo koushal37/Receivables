@@ -3,6 +3,7 @@ import helmet from 'helmet';
 import cors from 'cors';
 import rateLimit from 'express-rate-limit';
 import { ZodError } from 'zod';
+import { buildOriginMatcher } from './lib/cors.js';
 import authRoutes from './routes/authRoutes.js';
 import dashboardRoutes from './routes/dashboard.js';
 import importRoutes from './routes/importRoutes.js';
@@ -23,17 +24,14 @@ if (process.env.TRUST_PROXY) app.set('trust proxy', Number(process.env.TRUST_PRO
 // Security Headers
 app.use(helmet());
 
-const allowedOrigins = process.env.ALLOWED_ORIGINS
-  ? process.env.ALLOWED_ORIGINS.split(',').map((o) => o.trim())
-  : ['http://localhost:5173'];
+const isAllowedOrigin = buildOriginMatcher(process.env.ALLOWED_ORIGINS || undefined);
 
 app.use(cors({
   origin: (origin, callback) => {
-    if (!origin || allowedOrigins.includes(origin)) {
-      callback(null, true);
-    } else {
-      callback(new Error('Blocked by CORS policy'));
-    }
+    if (isAllowedOrigin(origin)) return callback(null, true);
+    // Say exactly what to fix: this shows up in the host's logs
+    console.warn(`[CORS] Blocked request from origin "${origin}". Add it to ALLOWED_ORIGINS to allow it.`);
+    callback(Object.assign(new Error('Origin not allowed by CORS'), { statusCode: 403 }));
   },
   credentials: true
 }));

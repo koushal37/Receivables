@@ -28,7 +28,11 @@ export async function api(endpoint, { body, ...options } = {}) {
       body: body !== undefined ? JSON.stringify(body) : undefined,
     });
   } catch {
-    throw new ApiError('Cannot reach the server. Check your connection and that the backend is running.', { status: 0 });
+    const target = BASE_URL.startsWith('http') ? new URL(BASE_URL).origin : 'the API';
+    const message = navigator.onLine === false
+      ? 'You’re offline. Check your internet connection and try again.'
+      : `Cannot reach ${target}. The server may be starting up (try again in a minute), or it isn’t allowing requests from ${window.location.origin} (CORS).`;
+    throw new ApiError(message, { status: 0 });
   }
 
   const isJson = response.headers.get('content-type')?.includes('application/json');
