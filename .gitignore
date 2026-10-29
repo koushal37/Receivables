@@ -24,7 +24,6 @@ dist-ssr
 *.sw?
 
 # Secrets
-CODEBASE.md
 .env
 .env.*
 !.env.example
@@ -41,3 +40,6 @@ supabase/.branches/
 # Local tool settings
 .claude/
 CLAUDE.md
+
+# Local-only docs
+CODEBASE.md

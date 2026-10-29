@@ -339,5 +339,3 @@ shared/       Parsers used by both sides (amounts, dates, phones, header aliases
 supabase/     SQL migrations
 render.yaml   Render Blueprint for the API
 ```
-
-See **[CODEBASE.md](CODEBASE.md)** for what every file and API route does.
